@@ -6,6 +6,7 @@ Intercept, inspect, and debug HTTP traffic from browsers, Android/iOS devices, D
 
 ## Features
 
+- **Live Traffic Capture** — Capture intercepted HTTP traffic in real-time with full request/response headers and bodies
 - **Browser Interception** — Launch Chrome or Firefox with traffic automatically routed through the proxy
 - **Android Interception** — Intercept device traffic via ADB or target specific apps with Frida (bypasses certificate pinning)
 - **iOS Interception** — Intercept specific iOS apps via Frida on jailbroken devices
@@ -15,10 +16,11 @@ Intercept, inspect, and debug HTTP traffic from browsers, Android/iOS devices, D
 - **Electron Apps** — Launch Electron applications with interception enabled
 - **HTTP Client** — Send HTTP requests through the proxy with full control over method, headers, and body
 - **Server Management** — Query configuration, manage interceptors, and control the server lifecycle
+- **Zero-Config with Desktop App** — Automatically detects auth token from the running HTTP Toolkit desktop app
 
 ## Prerequisites
 
-- [HTTP Toolkit](https://httptoolkit.com/) server running locally (default: `http://127.0.0.1:45457`)
+- [HTTP Toolkit](https://httptoolkit.com/) installed and running (desktop app or server)
 - Node.js >= 18
 
 ## Installation
@@ -89,10 +91,13 @@ Add to your `claude_desktop_config.json`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HTK_SERVER_URL` | HTTP Toolkit server URL | `http://127.0.0.1:45457` |
-| `HTK_SERVER_TOKEN` | Authentication token (if server requires one) | — |
+| `HTK_SERVER_URL` | HTTP Toolkit management API URL | `http://127.0.0.1:45457` |
+| `HTK_SERVER_TOKEN` | Auth token (auto-detected from desktop app) | Auto-detected |
+| `HTK_ADMIN_URL` | Mockttp admin API URL | `http://127.0.0.1:45456` |
 
-Example with environment variables:
+> **Note:** When using the HTTP Toolkit desktop app, the auth token is **automatically detected** from the running process — no manual configuration needed.
+
+Example with manual environment variables:
 
 ```json
 {
@@ -110,6 +115,12 @@ Example with environment variables:
 ```
 
 ## Available Tools
+
+### Traffic Capture
+
+| Tool | Description |
+|------|-------------|
+| `capture_traffic` | Capture live intercepted HTTP traffic with full request/response bodies. Subscribes to the active HTTP Toolkit session via WebSocket. Supports auto-detection or manual session ID. |
 
 ### Server Management
 
@@ -182,6 +193,7 @@ Example with environment variables:
 
 Once configured, you can ask your AI assistant things like:
 
+- *"Capture the HTTP traffic from my intercepted Chrome for 10 seconds"*
 - *"List all available interceptors"*
 - *"Intercept Chrome on port 8000"*
 - *"Show me the connected Android devices"*
@@ -190,6 +202,33 @@ Once configured, you can ask your AI assistant things like:
 - *"Set up Frida on my Android device and intercept the target app"*
 - *"Open an intercepted terminal session"*
 
+### Capture Traffic Example
+
+```
+User: "Capture traffic from my browser for 5 seconds"
+
+capture_traffic({ duration: 5, sessionId: "2474b580-482e-4a79-8488-121583d466e1" })
+
+Result:
+{
+  "capturedExchanges": 2,
+  "exchanges": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/users",
+        "headers": { "host": "api.example.com", ... },
+      },
+      "response": {
+        "statusCode": 200,
+        "headers": { "content-type": "application/json", ... },
+        "body": "[{\"id\": 1, \"name\": \"John\"}]"
+      }
+    }
+  ]
+}
+```
+
 ## Architecture
 
 ```
@@ -197,16 +236,17 @@ Once configured, you can ask your AI assistant things like:
 │   AI Assistant   │◄─────────────►│  httptoolkit-mcp  │◄────────────►│  httptoolkit-server  │
 │ (Claude, etc.)   │     MCP       │   (this project)  │   :45457     │     (HTTP Toolkit)   │
 └─────────────────┘               └──────────────────┘               └─────────────────────┘
-                                                                              │
-                                                                     ┌────────┴────────┐
-                                                                     │  Mockttp Proxy   │
-                                                                     │   :8000/45456    │
-                                                                     └────────┬────────┘
-                                                                              │
-                                                              ┌───────────────┼───────────────┐
-                                                              │               │               │
-                                                         Browsers       Android/iOS      Docker
-                                                                        Devices        Containers
+                                          │                                    │
+                                          │ WebSocket                 ┌────────┴────────┐
+                                          │ (traffic capture)         │  Mockttp Proxy   │
+                                          └──────────────────────────►│  :45456 (admin)  │
+                                                                      │  :8000  (proxy)  │
+                                                                      └────────┬────────┘
+                                                                               │
+                                                               ┌───────────────┼───────────────┐
+                                                               │               │               │
+                                                          Browsers       Android/iOS      Docker
+                                                                         Devices        Containers
 ```
 
 ## Credits
