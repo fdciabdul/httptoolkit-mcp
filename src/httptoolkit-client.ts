@@ -3,20 +3,53 @@
  * and the Mockttp admin API (proxy port, e.g. 8000 or 45456).
  */
 
+import { execSync } from 'child_process';
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:45457';
+
+/**
+ * Auto-detect the HTK_SERVER_TOKEN from a running httptoolkit-server process.
+ * The desktop app sets this env var on the server subprocess.
+ */
+function autoDetectToken(): string | undefined {
+  try {
+    // Find httptoolkit-server process and read its environment
+    const pids = execSync(
+      "pgrep -f 'httptoolkit-server' 2>/dev/null || true",
+      { encoding: 'utf-8' }
+    ).trim().split('\n').filter(Boolean);
+
+    for (const pid of pids) {
+      try {
+        const env = execSync(
+          `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^HTK_SERVER_TOKEN=' || true`,
+          { encoding: 'utf-8' }
+        ).trim();
+        const match = env.match(/^HTK_SERVER_TOKEN=(.+)$/);
+        if (match) return match[1];
+      } catch {}
+    }
+  } catch {}
+  return undefined;
+}
 
 export class HttpToolkitClient {
   private baseUrl: string;
   private headers: Record<string, string>;
 
   constructor(baseUrl?: string, authToken?: string) {
+    // Auto-detect token if not provided
+    const token = authToken || autoDetectToken();
+
     this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
     this.headers = {
       'Content-Type': 'application/json',
-      'Origin': 'http://localhost',
+      'Origin': token
+        ? 'https://app.httptoolkit.tech'  // Prod build requires this origin
+        : 'http://localhost',             // Dev build accepts localhost
     };
-    if (authToken) {
-      this.headers['Authorization'] = `Bearer ${authToken}`;
+    if (token) {
+      this.headers['Authorization'] = `Bearer ${token}`;
     }
   }
 
