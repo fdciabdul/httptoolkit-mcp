@@ -392,14 +392,15 @@ server.registerTool(
   {
     title: 'Capture Live Intercepted Traffic',
     description:
-      'Capture live HTTP(S) traffic being intercepted by HTTP Toolkit. Creates a temporary session, subscribes to traffic events via WebSocket, collects requests and responses for the specified duration, then returns all captured exchanges. Use this to see what HTTP requests are being made by intercepted browsers, apps, or containers.',
+      'Capture live HTTP(S) traffic being intercepted by HTTP Toolkit. Subscribes to the existing UI session\'s WebSocket events, collects requests and responses for the specified duration, then returns all captured exchanges. Auto-detects the session ID from server logs, or you can provide it manually.',
     inputSchema: z.object({
       duration: z.number().optional().describe('Duration in seconds to capture traffic (default: 5, max: 30)'),
+      sessionId: z.string().optional().describe('HTTP Toolkit session ID (auto-detected if not provided). Find it in the WebSocket URL in browser DevTools.'),
     }),
   },
-  async ({ duration }) => {
+  async ({ duration, sessionId }) => {
     const durationMs = Math.min((duration || 5), 30) * 1000;
-    const exchanges = await trafficCapture.captureLive(durationMs);
+    const exchanges = await trafficCapture.captureLive(durationMs, sessionId);
     return jsonResult({
       capturedExchanges: exchanges.length,
       exchanges,

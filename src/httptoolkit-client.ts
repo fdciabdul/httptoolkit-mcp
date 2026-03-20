@@ -11,7 +11,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:45457';
  * Auto-detect the HTK_SERVER_TOKEN from a running httptoolkit-server process.
  * The desktop app sets this env var on the server subprocess.
  */
-function autoDetectToken(): string | undefined {
+export function autoDetectToken(): string | undefined {
   try {
     // Find httptoolkit-server process and read its environment
     const pids = execSync(

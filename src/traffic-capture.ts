@@ -1,16 +1,18 @@
 /**
- * Captures intercepted HTTP traffic from the Mockttp admin API
- * via WebSocket GraphQL subscriptions.
+ * Captures intercepted HTTP traffic by subscribing to the existing
+ * HTTP Toolkit UI session's WebSocket GraphQL subscriptions.
  *
  * Flow:
- * 1. POST /start to create a new mock session on the admin server (port 45456)
- * 2. Connect WebSocket to /session/{id}/subscription
+ * 1. Find the existing UI session ID (from server logs or provided)
+ * 2. Connect WebSocket to /session/{id}/subscription on the admin server (port 45456)
  * 3. Subscribe to requestInitiated + responseCompleted events
  * 4. Collect events for the specified duration
  * 5. Return collected traffic
  */
 
+import { execSync } from 'child_process';
 import WebSocket from 'ws';
+import { autoDetectToken } from './httptoolkit-client.js';
 
 const DEFAULT_ADMIN_URL = 'http://127.0.0.1:45456';
 
@@ -29,7 +31,6 @@ export interface CapturedResponse {
   statusCode: number;
   statusMessage: string;
   headers: Record<string, string>;
-  body?: string;
   tags: string[];
 }
 
@@ -40,99 +41,103 @@ export interface CapturedExchange {
 
 export class TrafficCapture {
   private adminUrl: string;
+  private headers: Record<string, string>;
 
   constructor(adminUrl?: string) {
     this.adminUrl = (adminUrl || DEFAULT_ADMIN_URL).replace(/\/$/, '');
-  }
-
-  /**
-   * Create a new mock session on the Mockttp admin server.
-   */
-  private async createSession(): Promise<string> {
-    const res = await fetch(`${this.adminUrl}/start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': 'http://localhost',
-      },
-      body: JSON.stringify({
-        plugins: {
-          http: {
-            options: {
-              cors: false,
-              recordTraffic: false,
-            },
-            port: 0,
-          },
-        },
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to create mock session: ${res.status} ${await res.text()}`);
+    const token = autoDetectToken();
+    this.headers = {
+      'Content-Type': 'application/json',
+      'Origin': token
+        ? 'https://app.httptoolkit.tech'
+        : 'http://localhost',
+    };
+    if (token) {
+      this.headers['Authorization'] = `Bearer ${token}`;
     }
-
-    const data = (await res.json()) as { id: string };
-    return data.id;
   }
 
   /**
-   * Stop a mock session.
+   * Find the active UI session ID by scanning httptoolkit logs for UUIDs
+   * and testing each one via WebSocket connection.
    */
-  private async stopSession(sessionId: string): Promise<void> {
-    await fetch(`${this.adminUrl}/session/${sessionId}/stop`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': 'http://localhost',
-      },
-    }).catch(() => {}); // Best effort cleanup
+  private async probeSessionId(): Promise<string | undefined> {
+    try {
+      const log = execSync(
+        `cat ~/.config/httptoolkit/logs/last-run.log 2>/dev/null || true`,
+        { encoding: 'utf-8' }
+      );
+
+      // Find all UUIDs in the log that appear near "session"
+      const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+      const allUuids = [...new Set(log.match(uuidPattern) || [])];
+
+      // Try each UUID — connect WebSocket and see if it's a valid session
+      for (const uuid of allUuids) {
+        const isValid = await this.testSessionId(uuid);
+        if (isValid) return uuid;
+      }
+    } catch {}
+
+    return undefined;
   }
 
   /**
-   * Query the existing mock session for seen requests via the GraphQL API.
+   * Test if a session ID is valid by trying to connect WebSocket.
    */
-  private async queryMockedEndpoints(sessionId: string): Promise<any[]> {
-    const res = await fetch(`${this.adminUrl}/session/${sessionId}/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': 'http://localhost',
-      },
-      body: JSON.stringify({
-        query: `{
-          mockedEndpoints {
-            id
-            explanation
-            seenRequests {
-              id
-              protocol
-              method
-              url
-              path
-              headers
-              rawHeaders
-              remoteIpAddress
-              remotePort
-              tags
-              timingEvents
-            }
-          }
-        }`,
-      }),
+  private testSessionId(sessionId: string): Promise<boolean> {
+    const wsUrl = this.adminUrl.replace(/^http/, 'ws') +
+      `/session/${sessionId}/subscription`;
+
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl, 'graphql-ws', {
+        headers: this.headers,
+      });
+      const timeout = setTimeout(() => {
+        ws.close();
+        resolve(false);
+      }, 2000);
+
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'connection_init' }));
+      });
+      ws.on('message', (data: WebSocket.Data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'connection_ack') {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(true);
+        }
+      });
+      ws.on('error', () => {
+        clearTimeout(timeout);
+        resolve(false);
+      });
+      ws.on('close', () => {
+        clearTimeout(timeout);
+        resolve(false);
+      });
     });
-
-    if (!res.ok) return [];
-    const json = (await res.json()) as any;
-    return json?.data?.mockedEndpoints || [];
   }
 
   /**
    * Capture live traffic via WebSocket subscription for a given duration.
-   * Subscribes to requestInitiated and responseCompleted events.
+   * Subscribes to the existing UI session's requestInitiated and responseCompleted events.
    */
-  async captureLive(durationMs: number = 5000): Promise<CapturedExchange[]> {
-    const sessionId = await this.createSession();
+  async captureLive(durationMs: number = 5000, sessionId?: string): Promise<CapturedExchange[]> {
+    // Find the existing session if not provided
+    if (!sessionId) {
+      sessionId = await this.probeSessionId();
+    }
+
+    if (!sessionId) {
+      throw new Error(
+        'Could not find active HTTP Toolkit session. ' +
+        'Make sure HTTP Toolkit is running with an active interception session. ' +
+        'You can provide the session ID manually if auto-detection fails.'
+      );
+    }
+
     const wsUrl = this.adminUrl.replace(/^http/, 'ws') +
       `/session/${sessionId}/subscription`;
 
@@ -140,12 +145,11 @@ export class TrafficCapture {
 
     return new Promise<CapturedExchange[]>((resolve, reject) => {
       const ws = new WebSocket(wsUrl, 'graphql-ws', {
-        headers: { 'Origin': 'http://localhost' },
+        headers: this.headers,
       });
 
       const cleanup = () => {
         try { ws.close(); } catch {}
-        this.stopSession(sessionId).catch(() => {});
       };
 
       const timeout = setTimeout(() => {
@@ -154,7 +158,6 @@ export class TrafficCapture {
       }, durationMs);
 
       ws.on('open', () => {
-        // Init connection
         ws.send(JSON.stringify({ type: 'connection_init' }));
       });
 
