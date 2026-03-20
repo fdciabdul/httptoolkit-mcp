@@ -1,6 +1,6 @@
 {
   "name": "httptoolkit-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for HTTP Toolkit - intercept, inspect, and debug HTTP traffic via AI assistants",
   "type": "module",
   "main": "dist/index.js",
