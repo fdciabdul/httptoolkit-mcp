@@ -4,10 +4,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { HttpToolkitClient } from './httptoolkit-client.js';
+import { TrafficCapture } from './traffic-capture.js';
 
 const client = new HttpToolkitClient(
   process.env.HTK_SERVER_URL,
   process.env.HTK_SERVER_TOKEN
+);
+
+const trafficCapture = new TrafficCapture(
+  process.env.HTK_ADMIN_URL
 );
 
 const server = new McpServer({
@@ -376,6 +381,30 @@ server.registerTool(
   },
   async ({ id, proxyPort, options }) =>
     jsonResult(await client.activateInterceptor(id, proxyPort, options))
+);
+
+// ============================================================
+// Traffic Capture Tools
+// ============================================================
+
+server.registerTool(
+  'capture_traffic',
+  {
+    title: 'Capture Live Intercepted Traffic',
+    description:
+      'Capture live HTTP(S) traffic being intercepted by HTTP Toolkit. Creates a temporary session, subscribes to traffic events via WebSocket, collects requests and responses for the specified duration, then returns all captured exchanges. Use this to see what HTTP requests are being made by intercepted browsers, apps, or containers.',
+    inputSchema: z.object({
+      duration: z.number().optional().describe('Duration in seconds to capture traffic (default: 5, max: 30)'),
+    }),
+  },
+  async ({ duration }) => {
+    const durationMs = Math.min((duration || 5), 30) * 1000;
+    const exchanges = await trafficCapture.captureLive(durationMs);
+    return jsonResult({
+      capturedExchanges: exchanges.length,
+      exchanges,
+    });
+  }
 );
 
 // ============================================================

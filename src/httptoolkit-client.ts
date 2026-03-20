@@ -13,9 +13,6 @@ export class HttpToolkitClient {
     this.baseUrl = (baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
     this.headers = {
       'Content-Type': 'application/json',
-      // Required: httptoolkit-server uses cors-gate which rejects requests
-      // without a valid Origin header. We use http://localhost to match the
-      // dev allowed origins list.
       'Origin': 'http://localhost',
     };
     if (authToken) {
