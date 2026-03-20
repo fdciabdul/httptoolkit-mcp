@@ -22,6 +22,7 @@ export interface CapturedRequest {
   url: string;
   protocol: string;
   headers: Record<string, string>;
+  body?: string;
   remoteIpAddress?: string;
   tags: string[];
 }
@@ -31,6 +32,7 @@ export interface CapturedResponse {
   statusCode: number;
   statusMessage: string;
   headers: Record<string, string>;
+  body?: string;
   tags: string[];
 }
 
@@ -165,13 +167,13 @@ export class TrafficCapture {
         const msg = JSON.parse(data.toString());
 
         if (msg.type === 'connection_ack') {
-          // Subscribe to request initiated
+          // Subscribe to completed requests (includes body)
           ws.send(JSON.stringify({
             id: '1',
             type: 'start',
             payload: {
               query: `subscription {
-                requestInitiated {
+                requestReceived {
                   id
                   protocol
                   httpVersion
@@ -179,6 +181,7 @@ export class TrafficCapture {
                   url
                   path
                   headers
+                  body
                   remoteIpAddress
                   remotePort
                   tags
@@ -187,7 +190,7 @@ export class TrafficCapture {
             },
           }));
 
-          // Subscribe to response completed
+          // Subscribe to completed responses (includes body)
           ws.send(JSON.stringify({
             id: '2',
             type: 'start',
@@ -198,6 +201,7 @@ export class TrafficCapture {
                   statusCode
                   statusMessage
                   headers
+                  body
                   tags
                 }
               }`,
@@ -205,8 +209,16 @@ export class TrafficCapture {
           }));
         }
 
-        if (msg.type === 'data' && msg.id === '1' && msg.payload?.data?.requestInitiated) {
-          const req = msg.payload.data.requestInitiated;
+        if (msg.type === 'data' && msg.id === '1' && msg.payload?.data?.requestReceived) {
+          const req = msg.payload.data.requestReceived;
+          // Body comes as base64 Buffer from GraphQL
+          let body: string | undefined;
+          if (req.body) {
+            try {
+              body = Buffer.from(req.body, 'base64').toString('utf-8');
+              if (body.length > 2048) body = body.substring(0, 2048) + '... (truncated)';
+            } catch { body = undefined; }
+          }
           exchanges.set(req.id, {
             request: {
               id: req.id,
@@ -214,6 +226,7 @@ export class TrafficCapture {
               url: req.url,
               protocol: req.protocol,
               headers: req.headers,
+              body: body || undefined,
               remoteIpAddress: req.remoteIpAddress,
               tags: req.tags,
             },
@@ -222,6 +235,13 @@ export class TrafficCapture {
 
         if (msg.type === 'data' && msg.id === '2' && msg.payload?.data?.responseCompleted) {
           const resp = msg.payload.data.responseCompleted;
+          let body: string | undefined;
+          if (resp.body) {
+            try {
+              body = Buffer.from(resp.body, 'base64').toString('utf-8');
+              if (body.length > 4096) body = body.substring(0, 4096) + '... (truncated)';
+            } catch { body = undefined; }
+          }
           const exchange = exchanges.get(resp.id);
           if (exchange) {
             exchange.response = {
@@ -229,6 +249,7 @@ export class TrafficCapture {
               statusCode: resp.statusCode,
               statusMessage: resp.statusMessage,
               headers: resp.headers,
+              body: body || undefined,
               tags: resp.tags,
             };
           }
